@@ -1,0 +1,59 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Django stuff
+*.log
+*.pot
+*.pyc
+db.sqlite3
+*.sqlite3
+
+# Media and static (user-uploaded files)
+/media/
+/staticfiles/
+
+# Environments
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# VS Code and IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Test and coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Secrets and keys
+.env
+*.pem
+*.key
+
+# Misc
+*.log
+*.sqlite3-journal
+
+# migrations files
+*/migrations/*.pyc
+*/migrations/*.pyo
+*/migrations/*.py
+*/migrations/__pycache__/
+*/migrations/*.py[cod]

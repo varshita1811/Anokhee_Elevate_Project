@@ -69,6 +69,7 @@ class LoginView(APIView):
     def post(self, request):
         user_login = request.data.get("user_login")
         password = request.data.get("password")
+        request_user_role = request.data.get("user_role") or "Employee"
 
         user = authenticate(
             request,
@@ -81,6 +82,11 @@ class LoginView(APIView):
                 {"error": "Invalid credentials"},
                 status=status.HTTP_401_UNAUTHORIZED
             )
+        if user.user_role != request_user_role:
+            return Response(
+                {"error": "User role mismatch"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
         refresh = RefreshToken.for_user(user)
 
@@ -89,7 +95,8 @@ class LoginView(APIView):
             "refresh_token": str(refresh),
             "user": {
                 "user_id": user.user_id,
-                "user_login": user.user_login
+                "user_login": user.user_login,
+                "user_role": user.user_role,
             }
         })
     

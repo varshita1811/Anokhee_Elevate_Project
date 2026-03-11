@@ -47,7 +47,7 @@ class User(AbstractBaseUser):
     user_role = models.CharField(max_length=50) ## here it should display all 14 roles 
     user_firstname = models.CharField(max_length=100, null=False, validators=[alphanumeric_space_validator])
     user_lastname = models.CharField(max_length=100, null=False, validators=[alphanumeric_space_validator])
-    user_image = models.ImageField(upload_to='user_images/', null=True, blank=True)
+    user_image = models.CharField(max_length=500, null=True)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     no_of_points = models.IntegerField(null=True, default=0)
