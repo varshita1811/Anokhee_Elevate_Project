@@ -25,3 +25,8 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = "__all__"
+
+class AwardSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AwardsTable
+        fields = "__all__"
