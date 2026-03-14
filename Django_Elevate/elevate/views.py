@@ -1,4 +1,5 @@
 from django.shortcuts import render
+from httpx import request
 from rest_framework.views import APIView
 from .models import *
 from rest_framework.response import Response 
@@ -11,7 +12,7 @@ class manage_art_view(APIView):
     def get(self,request):
         list_art=ARTTable.objects.filter(user__user_id=request.user.user_id)
         if not list_art.exists():
-            return Response({"message": "No ARTs found for this user"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "No ARTs found for this user"}, status=status.HTTP_404_NOT_FOUND)
         json_art=art_serializers(list_art,many=True)
 
         return Response(json_art.data)
@@ -20,10 +21,17 @@ class manage_art_view(APIView):
         if request.user.user_role != "Art Manager":
             return Response(
                 {
-                    "message": "Only Art Managers are allowed to create ARTs"
+                    "error": "Only Art Managers are allowed to create ARTs"
                 },
                 status=status.HTTP_403_FORBIDDEN
             )
+        if str(request.data.get('user')) != str(request.user.user_id):
+            return Response(
+                {
+                    "error": "user_id in request body must match the authenticated user's ID"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            ) 
         serializer = art_serializers(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -40,17 +48,17 @@ class manage_art_view(APIView):
         if request.user.user_role != "Art Manager":
             return Response(
                 {
-                    "message": "Only Art Managers are allowed to update ARTs"
+                    "error": "Only Art Managers are allowed to update ARTs"
                 },
                 status=status.HTTP_403_FORBIDDEN
             )
-            
         art_id = request.query_params.get('art_id') or request.data.get('art_id')
         if not art_id:
             return Response({"error": "art_id is required either in query params or body"}, status=status.HTTP_400_BAD_REQUEST)
-            
+        if not ARTTable.objects.filter(art_id=art_id, user__user_id=request.user.user_id).exists():
+            return Response({"error": "ART not found or you do not have permission to update this ART"}, status=status.HTTP_404_NOT_FOUND)
         try:
-            art = ARTTable.objects.get(art_id=art_id)
+            art = ARTTable.objects.get(art_id=art_id, user__user_id=request.user.user_id)
         except ARTTable.DoesNotExist:
             return Response({"error": "ART not found"}, status=status.HTTP_404_NOT_FOUND)
             
@@ -78,7 +86,21 @@ class manage_teams_view(APIView):
         return Response(serializer.data)
 
     def post(self, request):
-    
+        if request.user.user_role != "Art Manager":
+            return Response(
+                {
+                    "error": "Only Art Managers are allowed to create teams"
+                },
+                status=403
+            )
+        if not ARTTable.objects.filter(art_id=request.data.get('art')).exists() or ARTTable.objects.filter(art_id=request.data.get('art'), user__user_id=request.user.user_id).first() is None:
+            return Response(
+                {
+                    "error": "The art field must reference a valid ART and you can only create teams for ARTs that you manage"
+                },
+                status=400
+            )
+
         serializer = TeamSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -93,6 +115,20 @@ class manage_teams_view(APIView):
 
     def put(self, request):
         team_id = request.query_params.get('team_id')
+        if request.user.user_role != "Art Manager":
+            return Response(
+                {
+                    "error": "Only Art Managers are allowed to update teams"
+                },
+                status=403
+            )
+        if not ARTTable.objects.filter(art_id=request.data.get('art')).exists() or ARTTable.objects.filter(art_id=request.data.get('art'), user__user_id=request.user.user_id).first() is None:
+            return Response(
+                {
+                    "error": "The art field must reference a valid ART and you can only update teams for ARTs that you manage"
+                },
+                status=400
+            )
         if not team_id:
             return Response({"error": "team_id is required either in query params or body"}, status=400)
         try:
@@ -113,6 +149,20 @@ class manage_teams_view(APIView):
         return Response(serializer.errors, status=400)
 
     def delete(self, request):
+        if request.user.user_role != "Art Manager":
+            return Response(
+                {
+                    "error": "Only Art Managers are allowed to delete teams"
+                },
+                status=403
+            )
+        if not ARTTable.objects.filter(art_id=request.data.get('art')).exists() or ARTTable.objects.filter(art_id=request.data.get('art'), user__user_id=request.user.user_id).first() is None:
+            return Response(
+                {
+                    "error": "The art field must reference a valid ART and you can only delete teams for ARTs that you manage"
+                },
+                status=400
+            )
         team_id = request.query_params.get('team_id')
         art_id = request.query_params.get('art_id')
         
@@ -144,61 +194,87 @@ class manage_team_member_view(APIView):
         return Response(serializer.data)
 
     def post(self, request):
+        if request.user.user_role == "Art Manager" or request.user.user_role == "Admin":
+            return Response(
+                {
+                    "error": "Art Managers and Admins cannot join as team members. Only Employees can join teams as members."
+                },
+                status=400
+            )
+        if TeamsTable.objects.filter(team_id=request.data.get('team')).first() is None:
+            return Response(
+                {
+                    "error": "The team field must reference a valid team that exists"
+                },
+                status=400
+            )
         serializer = TeamMemberSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            TeamMembersTable.objects.create(
+                team_id=serializer.validated_data['team'].team_id,
+                user_id=request.user.user_id,
+                is_active=False
+            )
             return Response(
                 {
                     "message": "Team member created successfully",
-                    "data": serializer.data
                 },
                 status=201
             )
         return Response(serializer.errors, status=400)
 
     def put(self, request):
-        team_id = request.query_params.get('team_id') or request.data.get('team_id')
-        employee_id = request.query_params.get('employee_id') or request.data.get('employee_id')
-        
-        if not employee_id:
-            # Maybe the user didn't pass employee_id, let's see if we can find by user_id and team_id instead if they passed user_id
-            user_id = request.query_params.get('user_id') or request.data.get('user_id')
-            if not user_id or not team_id:
-               return Response({"error": "employee_id (or team_id and user_id) is required"}, status=400)
-            try:
-                team_member = TeamMembersTable.objects.get(team=team_id, user=user_id)
-            except TeamMembersTable.DoesNotExist:
-                return Response({"error": "Team member not found"}, status=404)
-        else:
-            try:
-                if team_id:
-                    team_member = TeamMembersTable.objects.get(employee_id=employee_id, team=team_id)
-                else:
-                     team_member = TeamMembersTable.objects.get(employee_id=employee_id)
-            except TeamMembersTable.DoesNotExist:
-                return Response({"error": "Team member not found"}, status=404)
-        
-        serializer = TeamMemberSerializer(team_member, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
+        team_id = request.data.get('team_id')
+        is_active = request.data.get('is_active')
+        employee_id = request.query_params.get('employee_id')
+
+        if request.user.user_role != "Art Manager":
             return Response(
                 {
-                    "message": "Team member updated successfully",
-                    "data": serializer.data
+                    "error": "Only Art Managers can update team member status"
                 },
-                status=200
+                status=403
             )
-        return Response(serializer.errors, status=400)
+        if is_active is None or team_id is None or employee_id is None:
+            return Response(
+                {
+                    "error": "is_active, team_id, and employee_id are required to update team member status"
+                },
+                status=400
+            )
+        if not TeamsTable.objects.filter(team_id=team_id).exists() or TeamMembersTable.objects.filter(employee_id=employee_id, team__team_id=team_id,user__user_id = request.user.user_id).first() is None:
+            return Response(
+                {
+                    "error": "The team_id provided does not reference a valid team"
+                },
+                status=400
+             )
+
+        TeamMembersTable.objects.update_or_create(
+            is_active=is_active,
+            team_id=team_id
+        )
 
     def delete(self, request):
-        team_id = request.query_params.get('team_id')
+        ## TODO : Only Art Managers should be able to delete team members and they should only be able to delete members from teams that belong to their ART. Need to add those checks here.
+        if request.user.user_role != "Art Manager":
+            return Response(
+                {
+                    "error": "Only Art Managers can delete team members"
+                },
+                status=403
+                )
+        if not TeamsTable.objects.filter(team_id=request.data.get('team_id')).exists() or TeamMembersTable.objects.filter(employee_id=request.query_params.get('employee_id'), team__team_id=request.query_params.get('team_id'), team__art__user__user_id=request.user.user_id).first() is None:
+            return Response(
+                {
+                    "error": "The team_id provided does not reference a valid team or you do not have permission to delete members from this team"
+                }
+                ,status=400
+                )
         employee_id = request.query_params.get('employee_id')
-        
-        if not team_id or not employee_id:
-            return Response({"error": "team_id and employee_id are required in query parameters"}, status=400)
-            
+        team_id = request.data.get('team_id')
         try:
-            team_member = TeamMembersTable.objects.get(employee_id=employee_id, team=team_id)
+            team_member = TeamMembersTable.objects.get(employee_id=employee_id, team__team_id=team_id)
             team_member.delete()
             return Response({"message": "Team member deleted successfully"}, status=200)
         except TeamMembersTable.DoesNotExist:
@@ -209,13 +285,28 @@ class manage_sprint_view(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
         art_id = request.query_params.get('art_id')
-        sprints = SprintTable.objects.all()
-        if art_id:
-            sprints = sprints.filter(art=art_id)
+        if art_id is None:
+            return Response({"error": "art_id is required in query parameters"}, status=400)
+        
+        sprints = SprintTable.objects.filter(art__art_id=art_id)
         serializer = SprintSerializer(sprints, many=True)
         return Response(serializer.data)
 
     def post(self, request):
+        if request.user.user_role != "Art Manager":
+            return Response(
+                {
+                    "error": "Only Art Managers are allowed to create sprints"
+                },
+                status=403
+            )
+        if not ARTTable.objects.filter(art_id=request.data.get('art')).exists() or ARTTable.objects.filter(art_id=request.data.get('art'), user__user_id=request.user.user_id).first() is None:
+            return Response(
+                {
+                    "error": "The art field must reference a valid ART and you can only create sprints for ARTs that you manage"
+                },
+                status=400
+            )
         serializer = SprintSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -229,9 +320,23 @@ class manage_sprint_view(APIView):
         return Response(serializer.errors, status=400)
 
     def put(self, request):
-        sprint_id = request.query_params.get('sprint_id') or request.data.get('sprint_id')
+        if request.user.user_role != "Art Manager":
+            return Response(
+                {
+                    "error": "Only Art Managers are allowed to update sprints"
+                },
+                status=403
+            )
+        if not ARTTable.objects.filter(art_id=request.data.get('art')).exists() or ARTTable.objects.filter(art_id=request.data.get('art'), user__user_id=request.user.user_id).first() is None:
+            return Response(
+                {
+                    "error": "The art field must reference a valid ART and you can only update sprints for ARTs that you manage"
+                },
+                status=400
+            )
+        sprint_id =  request.data.get('sprint_id')
         if not sprint_id:
-            return Response({"error": "sprint_id is required either in query params or body"}, status=400)
+            return Response({"error": "sprint_id is required in body"}, status=400)
             
         try:
             sprint = SprintTable.objects.get(sprint_id=sprint_id)
@@ -251,9 +356,23 @@ class manage_sprint_view(APIView):
         return Response(serializer.errors, status=400)
 
     def delete(self, request):
-        sprint_id = request.query_params.get('sprint_id')
+        if request.user.user_role != "Art Manager":
+            return Response(
+                {
+                    "error": "Only Art Managers are allowed to delete sprints"
+                },
+                status=403
+            )
+        if not ARTTable.objects.filter(art_id=request.data.get('art')).exists() or ARTTable.objects.filter(art_id=request.data.get('art'), user__user_id=request.user.user_id).first() is None:
+            return Response(
+                {
+                    "error": "The art field must reference a valid ART and you can only delete sprints for ARTs that you manage"
+                },
+                status=400
+            ) 
+        sprint_id = request.data.get('sprint_id')
         if not sprint_id:
-            return Response({"error": "sprint_id is required in query parameters"}, status=400)
+            return Response({"error": "sprint_id is required in body"}, status=400)
             
         try:
             sprint = SprintTable.objects.get(sprint_id=sprint_id)
@@ -748,7 +867,7 @@ class get_art_employees_view(APIView):
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class manage_award_view(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated,IsAdminUser]
     def get(self, request):
         awards = AwardsTable.objects.all()
         serializer = AwardSerializer(awards, many=True)
@@ -827,7 +946,7 @@ class get_current_sprint_view(APIView):
         try:
             current_sprint = SprintTable.objects.filter(art=art_id, status="Active").first()
             if not current_sprint:
-                return Response({"message": "No active sprint found for this ART"}, status=status.HTTP_404_NOT_FOUND)
+                return Response({"error": "No active sprint found for this ART"}, status=status.HTTP_404_NOT_FOUND)
             
             serializer = SprintSerializer(current_sprint)
             return Response(serializer.data, status=status.HTTP_200_OK)
