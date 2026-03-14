@@ -80,7 +80,7 @@ class TeamMembersTable(models.Model):
     employee_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     team = models.ForeignKey(TeamsTable, to_field='team_id', on_delete=models.CASCADE, related_name='members')
     user = models.OneToOneField(User, to_field='user_id', on_delete=models.CASCADE, related_name='team_member',default=None)
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
