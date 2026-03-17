@@ -640,6 +640,26 @@ class get_admin_dashboard_details_view(APIView):
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+class get_admins_view(APIView):
+    def get(self, request):
+        try:
+            admins = User.objects.filter(user_role="Admin")
+            
+            response_data = []
+            for admin in admins:
+                user_name = f"{admin.user_firstname} {admin.user_lastname}".strip()
+                
+                response_data.append({
+                    "user_name": user_name,
+                    "user_role": admin.user_role,
+                    "user_status": admin.is_active
+                })
+                
+            return Response(response_data, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 class get_pending_art_managers_view(APIView):
     def get(self, request):
         try:

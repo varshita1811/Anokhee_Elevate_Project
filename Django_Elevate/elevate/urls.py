@@ -17,6 +17,7 @@ urlpatterns=[
     path('registered-art-managers/', get_registered_art_managers_view.as_view()),
     path('pending-art-employees/', get_pending_art_employees_view.as_view()),
     path('art-employees/', get_art_employees_view.as_view()),
+    path('admins/', get_admins_view.as_view()),
 
 
     #art manager - 
