@@ -12,48 +12,21 @@ urlpatterns=[
     path('nomination/', create_nomination_view.as_view()),
     path('leaderboard-art/', get_leaderboard_art_level_view.as_view()),
     path('leaderboard-team/', get_leaderboard_team_level_view.as_view()),
-    path('admin-dashboard/', get_admin_dashboard_details_view.as_view()),
-    path('pending-art-managers/', get_pending_art_managers_view.as_view()),
-    path('registered-art-managers/', get_registered_art_managers_view.as_view()),
-    path('pending-art-employees/', get_pending_art_employees_view.as_view()),
+    path('admin-dashboard/', get_admin_dashboard_details_view.as_view()),##done
+    path('pending-art-managers/', get_pending_art_managers_view.as_view()), ##done
+    path('registered-art-managers/', get_registered_art_managers_view.as_view()), ##done
+    path('pending-art-employees/', get_pending_art_employees_view.as_view()),##done
     path('art-employees/', get_art_employees_view.as_view()),
+<<<<<<< HEAD
     path('admins/', get_admins_view.as_view()),
+=======
+    path('awards/', manage_award_view.as_view()),
+    path('get-current-sprint/', get_current_sprint_view.as_view()),
+    path('update-art-manager-request/', update_art_manager_request_view.as_view()),
+    path('get-user-employee-details/', get_user_employee_details_view.as_view()),
+>>>>>>> e366fcc75fc7c5ed9874267e69e40798dd01e84b
 
 
-    #art manager - 
-
-    #get- inactive accounts(profiles)
-    #get all the profiles from user tables where the account status is inactive/onhold
-    #update profile -put (update the profile)
-
-
-    #update art -(put call)(art_name, department)
-    #delete art-(art_id queryparam)
-    #get art -get call(art-id queryparam)
-    #creating-art (post call)(art_name, department)
-
-    #----teams 
-    #create teams (post- team_name, team_despcription, art_id)
-    #get teams (get-art_id)
-    #update teams (put- team_name, team_despcription, art_id)
-    #delete teams (art_id and team_id queryparam)
-
-    #-----team members------
-    #create team members -(team_id,emp_firstname, emp_lastname,user_id,user_image,emp_role)
-    #update team members -(team_id,emp_firstname, emp_lastname,user_id,user_image,emp_role)
-    #get team members-(team_id and user_id queryparam)
-    #delete team members-(team_id and employee_id)
-
-    #-----Sprint----
-    #create sprint - (post sprint_name,art_id,year,quater,start_date,end_date,status)
-    #update sprint- (put sprint_name,art_id,year,quater,start_date,end_date,status)
-    #get sprint- (art_id queryparam)
-    #delete sprint (sprint_id)
-
-
-    #get sprint 
-    #get award
-    #get teams 
 
 
     
