@@ -19,6 +19,8 @@ from django.urls import path, include
 from elevate.urls import urlpatterns as elevate_urls
 from elevate.userManagementView import SignupView, LoginView, LogoutView
 from rest_framework_simplejwt.views import TokenRefreshView
+from django.conf import settings 
+from django.conf.urls.static import static
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -29,3 +31,5 @@ urlpatterns = [
     path('api/logout/', LogoutView.as_view()),
     path('api/token/refresh/', TokenRefreshView.as_view()),
 ]
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
