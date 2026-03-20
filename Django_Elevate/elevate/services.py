@@ -111,7 +111,7 @@ class Service:
             if art_id_of_user:
                 last_sprint_id = SprintTable.objects.filter(art=art_id_of_user, status="Completed").values_list('sprint_id', flat=True).order_by('-end_date').first()
             if last_sprint_id: 
-                last_sprint_top5_champions_in_your_art = CommonService.get_last_sprint_top5_champions_in_your_art(last_sprint_id,art_id_of_user)
+                last_sprint_top5_champions_in_your_art = get_last_sprint_top5_champions_in_your_art(last_sprint_id,art_id_of_user)
 
 
             home_page_data = {
@@ -236,7 +236,7 @@ def get_art_level_champions_top5(art_id):
         return art_level_champions_top5
 
 def get_organization_level_champions_top5_till_now():
-        employees = User.objects.filter(user_role="Employee").order_by('-no_of_points')[:5]
+        employees = User.objects.filter(is_staff=False, is_active=True).order_by('-no_of_points')[:5]
         organization_level_champions_top5_till_now =[]
         for user in employees:
             most_received_award_name = NominationsTable.objects.filter(nominee__in=TeamMembersTable.objects.filter(user=user).values_list('employee_id', flat=True)).values('award__award_name').annotate(count=Count('award')).order_by('-count').first()
