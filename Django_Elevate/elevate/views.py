@@ -677,7 +677,7 @@ class get_leaderboard_art_level_view(APIView):
             return Response({"error": "No active sprint found for the user's ART"}, status=status.HTTP_400_BAD_REQUEST)
         
         # Get all team members in this ART
-        team_members = TeamMembersTable.objects.filter(team_art_art_id=art_id).select_related('user')
+        team_members = TeamMembersTable.objects.filter(team__art__art_id=art_id).select_related('user') 
         
         leaderboard = []
         for member in team_members:
@@ -690,7 +690,8 @@ class get_leaderboard_art_level_view(APIView):
                 award_id_str = str(nom.award.award_id)
                 if award_id_str not in awards_dict:
                     awards_dict[award_id_str] = {
-                        "award": nom.award.award_name,
+                        "award_name": nom.award.award_name,
+                        "award_image": nom.award.award_image.url if nom.award.award_image else "",
                         "total_nomniations_for_award": 0,
                         "nominations_information": []
                     }
@@ -780,11 +781,11 @@ class get_leaderboard_team_level_view(APIView):
             # Add to leaderboard if they have points or awards
             if (user.no_of_points and user.no_of_points > 0) or list_of_awards:
                 leaderboard.append({
-                    "employee_name": f"{user.user_firstname} {user.user_lastname}".strip(),
-                    "employee_image": user.user_image.url if user.user_image else "",
+                    "employeename": f"{user.user_firstname} {user.user_lastname}".strip(),
+                    "image": user.user_image.url if user.user_image else "",
                     "total_awards": user.no_of_awards or 0,
                     "total_no_of_points": user.no_of_points or 0,
-                    "list_of_awards": list_of_awards
+                    "List_of_awards": list_of_awards
                 })
                 
         # Sort leaderboard by total_no_of_points in descending order
