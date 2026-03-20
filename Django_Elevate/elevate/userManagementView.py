@@ -1,3 +1,4 @@
+import uuid
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
@@ -17,7 +18,6 @@ class SignupView(APIView):
         user_lastname = request.data.get("user_lastname")
         password = request.data.get("password")
         user_role = request.data.get("user_role")
-        user_image = request.data.get("user_image", None)
 
         if not user_login or not password:
             return Response(
@@ -42,6 +42,11 @@ class SignupView(APIView):
                 {"error": "user_lastname cannot contain special characters"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        if User.objects.filter(user_login=user_login).exists():
+            return Response(
+                {"error": "User with this login already exists, Please choose a different login name"},
+                status=status.HTTP_409_CONFLICT
+            )
 
         try:
             user = User.objects.create_user(
@@ -50,15 +55,24 @@ class SignupView(APIView):
                 user_lastname=user_lastname,
                 password=password,
                 user_role=user_role,
-                user_image=user_image
             )
+
+            image = request.FILES.get("image") or request.FILES.get("user_image")
+            if image:
+                ext = image.name.split('.')[-1]
+                file_name = f"user_{user.user_id}_{uuid.uuid4()}.{ext}"
+                image.name = file_name
+                user.user_image = image
+                user.save()
+            else:
+                print("No image uploaded")
             return Response(
                 {"message": "User created successfully"},
                 status=status.HTTP_201_CREATED
             )
         except IntegrityError:
             return Response(
-                {"error": "User already exists"},
+                {"error": "User already exists, Please choose a different login name"},
                 status=status.HTTP_409_CONFLICT
             )
     

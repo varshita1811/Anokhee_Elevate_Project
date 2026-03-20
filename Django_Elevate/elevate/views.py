@@ -1,3 +1,7 @@
+from django.utils import timezone
+from datetime import timedelta
+
+from .services import *
 from django.shortcuts import render
 from rest_framework.views import APIView
 from .models import *
@@ -5,6 +9,7 @@ from rest_framework.response import Response
 from .serializers import *
 from rest_framework.permissions import IsAuthenticated,IsAdminUser
 from rest_framework import status
+from django.db.models import Count
 
 class manage_art_view(APIView):
     permission_classes = [IsAuthenticated]
@@ -13,6 +18,11 @@ class manage_art_view(APIView):
         if not list_art.exists():
             return Response({"error": "No ARTs found for this user"}, status=status.HTTP_404_NOT_FOUND)
         json_art=art_serializers(list_art,many=True)
+        ##add user name and image in response
+        for art in json_art.data:
+            user = User.objects.get(user_id=art['user'])
+            art['art_manager_name'] = f"{user.user_firstname} {user.user_lastname}"
+            art['art_manager_image'] = user.user_image.url if user.user_image else "" 
 
         return Response(json_art.data)
     
@@ -27,10 +37,19 @@ class manage_art_view(APIView):
         if str(request.data.get('user')) != str(request.user.user_id):
             return Response(
                 {
-                    "error": "user_id in request body must match the authenticated user's ID"
+                    "error": "You can only create ARTs for yourself. The user field must match your user_id."
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        if ARTTable.objects.filter(art_name=request.data.get('art_name')).exists():
+            return Response(
+                {
+                    "error": "An ART with this name already exists. Please choose a different name."
                 },
                 status=status.HTTP_400_BAD_REQUEST
-            ) 
+            )
+    
+             
         serializer = art_serializers(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -72,6 +91,25 @@ class manage_art_view(APIView):
                 status=status.HTTP_200_OK
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    def delete(self, request):
+        if request.user.user_role != "Art Manager":
+            return Response(
+                {
+                    "error": "Only Art Managers are allowed to delete ARTs"
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+        art_id = request.query_params.get('art_id')
+        if not art_id:
+            return Response({"error": "art_id is required in query parameters"}, status=status.HTTP_400_BAD_REQUEST)
+        if not ARTTable.objects.filter(art_id=art_id, user__user_id=request.user.user_id).exists():
+            return Response({"error": "ART not found or you do not have permission to delete this ART"}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            art = ARTTable.objects.get(art_id=art_id, user__user_id=request.user.user_id)
+            art.delete()
+            return Response({"message": "ART deleted successfully"}, status=status.HTTP_200_OK)
+        except ARTTable.DoesNotExist:
+            return Response({"error": "ART not found with the provided art_id"}, status=status.HTTP_404_NOT_FOUND)
 
 class manage_teams_view(APIView):
     permission_classes = [IsAuthenticated]
@@ -395,34 +433,6 @@ class manage_user_view(APIView):
             user_data.pop('password', None)
         return Response(serializer.data)
 
-    def post(self, request):
-        serializer = UserSerializer(data=request.data)
-        if serializer.is_valid():
-            user = User.objects.create_user(
-                user_login=serializer.validated_data.get('user_login'),
-                password=request.data.get('password'),
-                user_role=serializer.validated_data.get('user_role', 'Employee'),
-                user_firstname=serializer.validated_data.get('user_firstname'),
-                user_lastname=serializer.validated_data.get('user_lastname')
-            )
-       
-            user.user_image = serializer.validated_data.get('user_image', user.user_image)
-            user.no_of_points = serializer.validated_data.get('no_of_points', user.no_of_points)
-            user.no_of_awards = serializer.validated_data.get('no_of_awards', user.no_of_awards)
-            if 'is_active' in serializer.validated_data:
-                user.is_active = serializer.validated_data.get('is_active')
-            if 'is_staff' in serializer.validated_data:
-                user.is_staff = serializer.validated_data.get('is_staff')
-            user.save()
-            return Response(
-                {
-                    "message": "User created successfully",
-                    "data": UserSerializer(user).data
-                },
-                status=status.HTTP_201_CREATED
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
     def put(self, request):
         ##TODO needs lots of checks to ensure only admins can update roles and only art managers can update users in their ARTs etc
         user_id = request.query_params.get('user_id') or request.data.get('user_id')
@@ -466,25 +476,27 @@ class get_nomination_data_view(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
         user_id = request.user.user_id
-        sprint_id = request.query_params.get('sprint_id')
+        teammember = TeamMembersTable.objects.filter(user__user_id=user_id).first()
+        team_art = teammember.team.art if teammember else None
         
-        if not user_id or not sprint_id:
-            return Response({"error": "user_id and sprint_id are required in query params"}, status=status.HTTP_400_BAD_REQUEST)
+        sprint_id = SprintTable.objects.filter(art=team_art,status='Active').values_list('sprint_id', flat=True).first()
+        if sprint_id is None:
+            return Response({"error": "No active sprint found for the user's ART"}, status=status.HTTP_400_BAD_REQUEST)
             
         try:
-           
             sprint = SprintTable.objects.get(sprint_id=sprint_id)
             sprint_name = sprint.sprint_name
 
             employee_id = TeamMembersTable.objects.filter(user__user_id=user_id).values_list('employee_id', flat=True).first()
             
            
-            nominations = NominationsTable.objects.filter(nominator=employee_id, sprint=sprint_id)
+            nominations = NominationsTable.objects.filter(nominator__employee_id=employee_id, sprint=sprint_id)
             awards_used = []
             for nom in nominations:
                 awards_used.append({
                     "award_id": str(nom.award.award_id),
-                    "award_name": nom.award.award_name
+                    "award_name": nom.award.award_name,
+                    "award_description": nom.award.award_description
                 })
                 
             # Find User's Team
@@ -503,7 +515,7 @@ class get_nomination_data_view(APIView):
                         "employee_name": f"{member.user.user_firstname} {member.user.user_lastname}",
                         "team_name": user_team.team_name,
                         "employee_role": member.user.user_role,
-                        "employee_image": member.user.user_image
+                        "employee_image": member.user.user_image.url if member.user.user_image else ""
                     })
                     
                 # 4. Other Team Members
@@ -516,7 +528,7 @@ class get_nomination_data_view(APIView):
                         "employee_name": f"{member.user.user_firstname} {member.user.user_lastname}",
                         "team_name": member.team.team_name,
                         "employee_role": member.user.user_role,
-                        "employee_image": member.user.user_image
+                        "employee_image": member.user.user_image.url if member.user.user_image else ""
                     })
             except TeamMembersTable.DoesNotExist:
                 user_team_members = []
@@ -537,22 +549,27 @@ class get_nomination_data_view(APIView):
 class create_nomination_view(APIView):
     permission_classes = [IsAuthenticated]
     def post(self, request):
-        nominator_id = request.data.get('nominator_id')
-        nominee_id = request.data.get('nominee_id')
-        award_id = request.data.get('award_id')
+        nominator_id = request.data.get('nominator_id').replace("-","") if request.data.get('nominator_id') else None
+        nominee_id = request.data.get('nominee_id').replace("-","") if request.data.get('nominee_id') else None
+        sprint_id = request.data.get('sprint_id').replace("-","") if request.data.get('sprint_id') else None
+        award_id = request.data.get('award_id') if request.data.get('award_id') else None
         comments = request.data.get('comments')
-        sprint_id = request.data.get('sprint_id')
-        
         if not all([nominator_id, nominee_id, award_id, comments]):
             return Response({"error": "nominator_id, nominee_id, award_id, and comments are required"}, status=status.HTTP_400_BAD_REQUEST)
 
+        if TeamMembersTable.objects.filter(user__user_id=request.user.user_id,employee_id=nominator_id).exists() is False:
+            return Response({"error": "You can only nominate if using your creds."}, status=status.HTTP_403_FORBIDDEN)
+        
+
+
         try:
             # 1. Validate Nominator
-            nominator = TeamMembersTable.objects.get(employee_id=nominator_id)
-
+            nominator = TeamMembersTable.objects.filter(employee_id=nominator_id).first()
+            print("Nominator:", nominator)
             # 2. Validate Nominated Employee
-            nominee_employee = TeamMembersTable.objects.get(employee_id=nominee_id)
-            nominee_user = nominee_employee.user
+            nominee = TeamMembersTable.objects.filter(employee_id=nominee_id).first()
+            print("Nominee:", nominee)
+            nominee_user = nominee.user
             
             # 3. Validate Award
             award = AwardsTable.objects.get(award_id=award_id)
@@ -561,20 +578,23 @@ class create_nomination_view(APIView):
             if sprint_id:
                 sprint = SprintTable.objects.get(sprint_id=sprint_id)
             else:
-                sprint = SprintTable.objects.filter(art=nominee_employee.team.art).order_by('-created_at').first()
+                sprint = SprintTable.objects.filter(art=nominee.team.art).order_by('-created_at').first()
                 if not sprint:
                     return Response({"error": "No sprint found. Please provide sprint_id."}, status=status.HTTP_400_BAD_REQUEST)
-                    
+            print("Sprint:", sprint)
+            print("Nominee Employee ID:", nominee.employee_id)
+            print("Nominator Employee ID:", nominator.employee_id) 
             # 5. Check nominations left
-            nominations_made = NominationsTable.objects.filter(nominator=nominator.employee_id, sprint=sprint,employee_nominated=nominee_employee.employee_id).count()
+            nominations_made = NominationsTable.objects.filter(nominator=nominator, sprint=sprint, nominee=nominee).count()
+            print("Nominations Made:", nominations_made)
             nominations_left = 5 - nominations_made
             if nominations_left <= 0:
                 return Response({"error": "You have exhausted your 5 nominations for this sprint."}, status=status.HTTP_400_BAD_REQUEST)
                 
             # 6. Create Nomination
             nomination = NominationsTable.objects.create(
-                employee_nominated=nominee_employee.employee_id,
-                nominator=nominator.employee_id,
+                nominee=nominee,
+                nominator=nominator,
                 award=award,
                 sprint=sprint,
                 comments=comments,
@@ -587,18 +607,19 @@ class create_nomination_view(APIView):
             nominee_user.save()
             
             # 8. Update JiraTasksTable
-            jira_task = JiraTasksTable.objects.filter(employee=nominee_employee, sprint=sprint).first()
+            jira_task = JiraTasksTable.objects.filter(employee=nominee, sprint=sprint).first()
             if jira_task:
                 jira_task.no_of_awards = (jira_task.no_of_awards or 0) + 1
                 jira_task.no_of_points = (jira_task.no_of_points or 0) + points_to_add
                 jira_task.save()
             else:
                 JiraTasksTable.objects.create(
-                    employee=nominee_employee,
+                    employee=nominee,
                     sprint=sprint,
+                    team=nominee.team,
                     no_of_awards=1,
                     no_of_points=points_to_add,
-                    tasks = None
+                    tasks = None 
                 )
                 
             return Response({
@@ -619,30 +640,51 @@ class create_nomination_view(APIView):
             return Response({"error": "Sprint not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class get_current_sprint_view(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        team = TeamMembersTable.objects.filter(user__user_id=request.user.user_id).select_related('team').first()
+        art_id = TeamsTable.objects.filter(team_id=team.team_id).values_list('art_id', flat=True).first() if team else None
+        if not art_id:
+            return Response({"error": "art_id is required in query parameters"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            current_sprint = SprintTable.objects.filter(art=art_id, status="Active").first()
+            if not current_sprint:
+                return Response({"error": "No active sprint found for this ART"}, status=status.HTTP_404_NOT_FOUND)
+            
+            serializer = SprintSerializer(current_sprint)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class get_leaderboard_art_level_view(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
         art_id = request.query_params.get('art_id')
-        if not art_id:
-            return Response({"error": "art_id is required in query parameters"}, status=status.HTTP_400_BAD_REQUEST)
+        if not art_id or ARTTable.objects.filter(art_id=art_id).first() is None:
+            return Response({"error": "art_id is invalid or not provided"}, status=status.HTTP_400_BAD_REQUEST)
         
-        try:
-            art = ARTTable.objects.get(art_id=art_id)
-        except ARTTable.DoesNotExist:
-            return Response({"error": "ART not found"}, status=status.HTTP_404_NOT_FOUND)
-
+        get_current_sprint_view_instance = get_current_sprint_view()
+        sprint_response = get_current_sprint_view_instance.get(request)
+        if sprint_response.status_code != 200: 
+            return Response({"error": "Could not fetch current sprint information"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        sprint_id = sprint_response.data.get("sprint_id")
+        if not sprint_id:
+            return Response({"error": "No active sprint found for the user's ART"}, status=status.HTTP_400_BAD_REQUEST)
+        
         # Get all team members in this ART
-        team_members = TeamMembersTable.objects.filter(team__art=art_id).select_related('user')
+        team_members = TeamMembersTable.objects.filter(team_art_art_id=art_id).select_related('user')
         
         leaderboard = []
         for member in team_members:
             user = member.user
-            
             # Fetch all nominations for this employee
-            nominations = NominationsTable.objects.filter(employee_nominated=member.employee_id).select_related('award')
-            
-            # Group nominations by award
+            nominations = NominationsTable.objects.filter(nominee=member, sprint_id=sprint_id).select_related('award')
+            # Group nominations by award  
             awards_dict = {}
             for nom in nominations:
                 award_id_str = str(nom.award.award_id)
@@ -654,14 +696,12 @@ class get_leaderboard_art_level_view(APIView):
                     }
                 
                 awards_dict[award_id_str]["total_nomniations_for_award"] += 1
-                
                 # Fetch nominator details
                 try:
-                    nominator_user = User.objects.get(user_id=nom.nominator)
+                    nominator_user = User.objects.get(user_id=nom.nominator.user.user_id) if nom.nominator and nom.nominator.user else None 
                     nominator_name = f"{nominator_user.user_firstname} {nominator_user.user_lastname}".strip()
                 except User.DoesNotExist:
                     nominator_name = "Unknown"
-                    
                 awards_dict[award_id_str]["nominations_information"].append({
                     "nominator": nominator_name,
                     "nomination_date": nom.nomination_date.strftime("%Y-%m-%d") if nom.nomination_date else nom.created_at.strftime("%Y-%m-%d"),
@@ -669,33 +709,34 @@ class get_leaderboard_art_level_view(APIView):
                 })
             
             list_of_awards = list(awards_dict.values())
-            
             # Add to leaderboard if they have points or awards
             if (user.no_of_points and user.no_of_points > 0) or list_of_awards:
                 leaderboard.append({
                     "employeename": f"{user.user_firstname} {user.user_lastname}".strip(),
-                    "image": user.user_image or "",
+                    "image": user.user_image.url if user and user.user_image else "",
                     "total_awards": user.no_of_awards or 0,
                     "total_no_of_points": user.no_of_points or 0,
                     "List_of_awards": list_of_awards
                 })
-                
         # Sort leaderboard by total_no_of_points in descending order
         leaderboard.sort(key=lambda x: x["total_no_of_points"], reverse=True)
-        
         return Response(leaderboard, status=status.HTTP_200_OK)
 
 class get_leaderboard_team_level_view(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        team_id = request.query_params.get('team_id')
-        if not team_id:
+        team_id = TeamMembersTable.objects.filter(user__user_id=request.user.user_id).values_list('team__team_id', flat=True).first()
+        if not team_id or team_id is None:
             return Response({"error": "team_id is required in query parameters"}, status=status.HTTP_400_BAD_REQUEST)
         
-        try:
-            team = TeamsTable.objects.get(team_id=team_id)
-        except TeamsTable.DoesNotExist:
-            return Response({"error": "Team not found"}, status=status.HTTP_404_NOT_FOUND)
+        get_current_sprint_view_instance = get_current_sprint_view()
+        sprint_response = get_current_sprint_view_instance.get(request)
+        if sprint_response.status_code != 200: 
+            return Response({"error": "Could not fetch current sprint information"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        sprint_id = sprint_response.data.get("sprint_id")
+        if not sprint_id:
+            return Response({"error": "No active sprint found for the user's ART"}, status=status.HTTP_400_BAD_REQUEST)
+
 
         # Get all team members in this specific team
         team_members = TeamMembersTable.objects.filter(team=team_id).select_related('user')
@@ -705,7 +746,7 @@ class get_leaderboard_team_level_view(APIView):
             user = member.user
             
             # Fetch all nominations for this employee
-            nominations = NominationsTable.objects.filter(employee_nominated=member.employee_id).select_related('award')
+            nominations = NominationsTable.objects.filter(nominee__employee_id=member.employee_id, sprint=sprint_id).select_related('award')
             
             # Group nominations by award
             awards_dict = {}
@@ -713,16 +754,17 @@ class get_leaderboard_team_level_view(APIView):
                 award_id_str = str(nom.award.award_id)
                 if award_id_str not in awards_dict:
                     awards_dict[award_id_str] = {
-                        "award": nom.award.award_name,
-                        "total_nomniations_for_award": 0,
+                        "award_name": nom.award.award_name,
+                        "award_image": nom.award.award_image.url if nom.award and nom.award.award_image else "",
+                        "total_nominations_for_award": 0,
                         "nominations_information": []
                     }
                 
-                awards_dict[award_id_str]["total_nomniations_for_award"] += 1
+                awards_dict[award_id_str]["total_nominations_for_award"] += 1
                 
                 # Fetch nominator details
                 try:
-                    nominator_user = User.objects.get(user_id=nom.nominator)
+                    nominator_user = User.objects.get(user_id=nom.nominator.user.user_id)
                     nominator_name = f"{nominator_user.user_firstname} {nominator_user.user_lastname}".strip()
                 except User.DoesNotExist:
                     nominator_name = "Unknown"
@@ -738,11 +780,11 @@ class get_leaderboard_team_level_view(APIView):
             # Add to leaderboard if they have points or awards
             if (user.no_of_points and user.no_of_points > 0) or list_of_awards:
                 leaderboard.append({
-                    "employeename": f"{user.user_firstname} {user.user_lastname}".strip(),
-                    "image": user.user_image or "",
+                    "employee_name": f"{user.user_firstname} {user.user_lastname}".strip(),
+                    "employee_image": user.user_image.url if user.user_image else "",
                     "total_awards": user.no_of_awards or 0,
                     "total_no_of_points": user.no_of_points or 0,
-                    "List_of_awards": list_of_awards
+                    "list_of_awards": list_of_awards
                 })
                 
         # Sort leaderboard by total_no_of_points in descending order
@@ -754,11 +796,11 @@ class get_admin_dashboard_details_view(APIView):
     permission_classes = [IsAuthenticated, IsAdminUser]
     def get(self, request):
         try:
-            total_users = User.objects.count()
+            total_users = User.objects.exclude(user_role__in=["Admin","Art Manager"]).count()
             total_arts = ARTTable.objects.count()
             total_teams = TeamsTable.objects.count()
             all_time_nominations = NominationsTable.objects.count()
-            
+            ##TODO have total_employess and total_art_managers 
             response_data = {
                 "total_users": total_users,
                 "total_arts": total_arts,
@@ -792,6 +834,8 @@ class get_admins_view(APIView):
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class get_pending_art_managers_view(APIView):
+    ##TODO
+    ##add admin request under admin dashboard
     permission_classes = [IsAuthenticated, IsAdminUser]
     def get(self, request):
         try:
@@ -799,6 +843,7 @@ class get_pending_art_managers_view(APIView):
             response_data = []
             for user in user_ids_of_managers:
                 response_data.append({
+                    "user_id": str(user.user_id),
                     "user_name": f"{user.user_firstname} {user.user_lastname}".strip(),
                     "user_role": "Art Manager",
                     "status": "Pending"
@@ -813,7 +858,7 @@ class get_registered_art_managers_view(APIView):
     def get(self, request):
         try:
             # Fetch all users with the role 'Art Manager'
-            art_managers = User.objects.filter(user_role="Art Manager")
+            art_managers = User.objects.filter(user_role="Art Manager",is_active=True)
             
             response_data = []
             for manager in art_managers:
@@ -824,7 +869,9 @@ class get_registered_art_managers_view(APIView):
                     "user_name": user_name,
                     "user_role": manager.user_role,
                     "status": status_text,
-                    "user_login": manager.user_login
+                    "user_login": manager.user_login,
+                    "art_name": ARTTable.objects.filter(user__user_id=manager.user_id).values_list('art_name', flat=True).first() or "N/A",
+                    "department": ARTTable.objects.filter(user__user_id=manager.user_id).values_list('department', flat=True).first() or "N/A"
                 })
                 
             return Response(response_data, status=status.HTTP_200_OK)
@@ -855,7 +902,7 @@ class get_pending_art_employees_view(APIView):
                     "employee_name": f"{user.user_firstname} {user.user_lastname}".strip(),
                     "team_name": member.team.team_name,
                     "employee_role": user.user_role,
-                    "image": user.user_image or "",
+                    "image": user.user_image.url if user.user_image else "",
                     "active_status": "Pending"
                 })
             return Response(response_data, status=status.HTTP_200_OK)
@@ -866,180 +913,63 @@ class get_pending_art_employees_view(APIView):
 class get_art_employees_view(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        art_id = request.query_params.get('art_id')
-        if not art_id:
-            return Response({"error": "art_id is required in query parameters"}, status=status.HTTP_400_BAD_REQUEST)
-            
-        try:
-            # Fetch all team members associated with teams in this ART
-            team_members = TeamMembersTable.objects.filter(team__art=art_id,is_active=1).select_related('user', 'team')
-            
-            response_data = []
-            for member in team_members:
-                user = member.user
-                
-                employee_name = f"{user.user_firstname} {user.user_lastname}".strip()
-                status_text = "Active" if user.is_active else "Pending"
-                
-                response_data.append({
-                    "employee_id": str(member.employee_id),
-                    "employee_name": employee_name,
-                    "team_name": member.team.team_name,
-                    "employee_role": user.user_role,
-                    "image": user.user_image or "",
-                    "total_points": user.no_of_points or 0,
-                    "total_awards": user.no_of_awards or 0,
-                    "active_status": status_text
-                })
-                    
-            return Response(response_data, status=status.HTTP_200_OK)
-            
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        response = Service.get_art_employees(request)
+        return CommonService.CustomResponse(response)
 
 class manage_award_view(APIView):
-    permission_classes = [IsAuthenticated,IsAdminUser]
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [IsAuthenticated()]
+
+        if self.request.method == 'POST':
+            return [IsAuthenticated(), IsAdminUser()]
+        
+        if self.request.method == 'DELETE':
+            return [IsAuthenticated(), IsAdminUser()]
+        
+        if self.request.method == 'PUT':
+            return [IsAuthenticated(), IsAdminUser()]
+
+        return [IsAuthenticated()]
+    
     def get(self, request):
-        awards = AwardsTable.objects.all()
-        serializer = AwardSerializer(awards, many=True)
-        return Response(serializer.data)
+        response = Service.get_awards()
+        return CommonService.CustomResponse(response)
+
 
     def post(self, request):
-        serializer = AwardSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(
-                serializer.errors,
-                    status=status.HTTP_400_BAD_REQUEST
-            )
-        try:
-            serializer.save()
-            return Response(
-                {
-                    "message": "Award created successfully",
-                    "data": serializer.data
-                },
-                status=status.HTTP_201_CREATED
-            )
-        except  Exception as e:
-            return Response(
-                {"error": "Award with this name already exists"},
-                status=status.HTTP_409_CONFLICT
-            )
+        response = Service.create_award(request)
+        return CommonService.CustomResponse(response)
+    
     def put(self, request):
-        award_id = request.query_params.get('award_id')
-        if not award_id:
-            return Response({"error": "award_id is required either in query params or body"}, status=status.HTTP_400_BAD_REQUEST)
-            
-        try:
-            award = AwardsTable.objects.get(award_id=award_id)
-        except AwardsTable.DoesNotExist:
-            return Response({"error": "Award not found"}, status=status.HTTP_404_NOT_FOUND)
-            
-        serializer = AwardSerializer(award, data=request.data, partial=True)
-        if not serializer.is_valid():
-            return Response(
-                serializer.errors, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        try:
-            serializer.save()
-            return Response(
-                {
-                    "message": "Award updated successfully",
-                    "data": serializer.data
-                },
-                status=status.HTTP_200_OK
-            )
-        except Exception as e:
-            return Response(
-                {"error": "Award with this name already exists"},
-                status=status.HTTP_409_CONFLICT
-            )
+        response = Service.update_award(request)
+        return CommonService.CustomResponse(response)
+    
     def delete(self, request):
-        award_id = request.query_params.get('award_id')
-        if not award_id:
-            return Response({"error": "award_id is required in query parameters"}, status=status.HTTP_400_BAD_REQUEST)  
-        try:
-            award = AwardsTable.objects.get(award_id=award_id)
-            award.delete()
-            return Response({"message": "Award deleted successfully"}, status=status.HTTP_200_OK)
-        except AwardsTable.DoesNotExist:
-            return Response({"error": "Award not found with the provided award_id"}, status=status.HTTP_404_NOT_FOUND)
+        response = Service.delete_award(request)
+        return CommonService.CustomResponse(response)
         
-
-class get_current_sprint_view(APIView):
-    permission_classes = [IsAuthenticated]
-    def get(self, request):
-        team = TeamMembersTable.objects.filter(user__user_id=request.user.user_id).select_related('team').first()
-        art_id = TeamsTable.objects.filter(team_id=team.team_id).values_list('art_id', flat=True).first() if team else None
-        if not art_id:
-            return Response({"error": "art_id is required in query parameters"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            current_sprint = SprintTable.objects.filter(art=art_id, status="Active").first()
-            if not current_sprint:
-                return Response({"error": "No active sprint found for this ART"}, status=status.HTTP_404_NOT_FOUND)
-            
-            serializer = SprintSerializer(current_sprint)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-            
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
 class update_art_manager_request_view(APIView):
     permission_classes = [IsAuthenticated,IsAdminUser]
     def put(self, request):
-        if request.user.user_role != "Admin":
-            return Response(
-                {
-                    "error": "Only Admins are allowed to update Art Manager request status"
-                },
-                status=403
-            )
-        serializer = UserSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(
-                serializer.errors, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        art_manager_id = request.data.get('art_manager_id')
-        status_to_update = request.data.get('status')
-        if not art_manager_id or status_to_update not in ["Approved", "Rejected"]:
-            return Response(
-                {"error": "art_manager_id and valid status (Approved/Rejected) are required in the request body"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        try:
-            user = User.objects.get(user_id=art_manager_id, user_role="Art Manager")
-            if status_to_update == "Approved":
-                user.is_active = True
-                user.save()
-                return Response({"message": "Art Manager request approved successfully"}, status=status.HTTP_200_OK)
-            else:
-                user.delete()
-                return Response({"message": "Art Manager request rejected and user deleted successfully"}, status=status.HTTP_200_OK)
-        except User.DoesNotExist:
-            return Response({"error": "Art Manager user not found with the provided art_manager_id"}, status=status.HTTP_404_NOT_FOUND)
+        response = Service.update_art_manager_request(request)
+        return CommonService.CustomResponse(response)
         
 class get_user_employee_details_view(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        user_id = request.user.user_id
-        if not user_id:
-            return Response({"error": "user_id is required in query parameters"}, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            team_member = TeamMembersTable.objects.select_related('user', 'team').get(user__user_id=user_id)
-            user = team_member.user
-            employee_details = {
-                "employee_id": str(team_member.employee_id),
-                "employee_name": f"{user.user_firstname} {user.user_lastname}".strip(),
-                "team_name": team_member.team.team_name,
-                "employee_role": user.user_role,
-                "image": user.user_image or "",
-                "total_points": user.no_of_points or 0,
-                "total_awards": user.no_of_awards or 0,
-                "active_status": "Active" if user.is_active else "Pending"
-            }
-            return Response(employee_details, status=status.HTTP_200_OK)
-        except TeamMembersTable.DoesNotExist:
-            return Response({"error": "Employee details not found for the provided user_id"}, status=status.HTTP_404_NOT_FOUND)
+        response = Service.get_user_employee_details(request)
+        return CommonService.CustomResponse(response)
+
+class get_arts_and_teams_view(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        response = Service.get_arts_and_teams()
+        return CommonService.CustomResponse(response)
+
+class get_user_home_page_data_view(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        response = Service.get_user_home_page_data(request)
+        return CommonService.CustomResponse(response)

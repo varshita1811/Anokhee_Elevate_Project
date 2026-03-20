@@ -8,7 +8,7 @@ from django.core.validators import RegexValidator
 from django.core.validators import RegexValidator
 
 class UserManager(BaseUserManager):
-    def create_user(self, user_login, password=None, user_role="Employee",user_firstname=None, user_lastname=None,user_image=None):
+    def create_user(self, user_login, password=None, user_role="Employee",user_firstname=None, user_lastname=None):
         if not user_login or not user_firstname or not user_lastname:
             raise ValueError("User login, first name, and last name are required")
 
@@ -17,7 +17,6 @@ class UserManager(BaseUserManager):
             user_role=user_role,
             user_firstname=user_firstname,
             user_lastname=user_lastname,
-            user_image=user_image,
             no_of_points=0,
             no_of_awards=0
         )
@@ -47,7 +46,7 @@ class User(AbstractBaseUser):
     user_role = models.CharField(max_length=50) ## here it should display all 14 roles 
     user_firstname = models.CharField(max_length=100, null=False, validators=[alphanumeric_space_validator])
     user_lastname = models.CharField(max_length=100, null=False, validators=[alphanumeric_space_validator])
-    user_image = models.CharField(max_length=500, null=True)
+    user_image = models.ImageField(upload_to="userImages/", null=True, blank=True)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     no_of_points = models.IntegerField(null=True, default=0)
@@ -100,16 +99,16 @@ class AwardsTable(models.Model):
     award_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     award_name = models.CharField(max_length=200, unique=True)
     award_description = models.TextField()
-    award_image = models.CharField(max_length=500, null=True)
+    award_image = models.ImageField(upload_to="awardImages/", null=True, blank=True,default=None)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
 class NominationsTable(models.Model):
     nomination_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    employee_nominated = models.UUIDField( editable=False)
+    nominee = models.ForeignKey(TeamMembersTable, to_field='employee_id', on_delete=models.CASCADE, related_name='nominations',default=None)
     sprint = models.ForeignKey(SprintTable, to_field='sprint_id', on_delete=models.CASCADE, related_name='nominations')
     award = models.ForeignKey(AwardsTable, to_field='award_id', on_delete=models.CASCADE, related_name='nominations')
-    nominator = models.UUIDField( editable=False)
+    nominator = models.ForeignKey(TeamMembersTable, to_field='employee_id', on_delete=models.CASCADE, related_name='nominated_by',default=None)
     comments = models.TextField(null=False)
     nomination_date = models.DateTimeField(auto_now_add=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -119,6 +118,7 @@ class NominationsTable(models.Model):
 class JiraTasksTable(models.Model):
     tasks_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     employee = models.ForeignKey(TeamMembersTable, to_field='employee_id', on_delete=models.CASCADE, related_name='jira_tasks')
+    team = models.ForeignKey(TeamsTable, to_field='team_id', on_delete=models.CASCADE, related_name='jira_tasks',default=None)
     tasks = models.JSONField(null=True)
     sprint = models.ForeignKey(SprintTable, to_field='sprint_id', on_delete=models.CASCADE, related_name='jira_tasks')
     no_of_points = models.IntegerField(null=True, default=0)

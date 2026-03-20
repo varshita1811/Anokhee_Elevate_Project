@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.urls import path
 from .views import *
 
+
 urlpatterns=[
     path("art/",manage_art_view.as_view()),
     path('teams/', manage_teams_view.as_view()),
@@ -24,14 +25,8 @@ urlpatterns=[
     path('get-current-sprint/', get_current_sprint_view.as_view()),
     path('update-art-manager-request/', update_art_manager_request_view.as_view()),
     path('get-user-employee-details/', get_user_employee_details_view.as_view()),
->>>>>>> e366fcc75fc7c5ed9874267e69e40798dd01e84b
-
-
-
-
-    
-
-    
+    path('get-arts-and-teams/', get_arts_and_teams_view.as_view()),
+    path('get-user-home-page-data/', get_user_home_page_data_view.as_view()), 
 
 
 ]
