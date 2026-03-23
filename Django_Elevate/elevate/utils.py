@@ -3,7 +3,7 @@ from rest_framework.response import Response
 
 class CommonService:
     @staticmethod
-    def success(data=None, message="Success", status=status.HTTP_200_OK):
+    def success(data={}, message="Success", status=status.HTTP_200_OK):
         return {
             "success": True,
             "message": message,

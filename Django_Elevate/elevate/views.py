@@ -424,7 +424,20 @@ class manage_sprint_view(APIView):
             return Response({"error": "Sprint not found with the provided sprint_id"}, status=404)
 
 class manage_user_view(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [IsAuthenticated()]
+
+        if self.request.method == 'POST':
+            return [IsAuthenticated()]
+        
+        if self.request.method == 'DELETE':
+            return [IsAuthenticated(), IsAdminUser()]
+        
+        if self.request.method == 'PUT':
+            return [IsAuthenticated()]
+
+        return [IsAuthenticated()]
     def get(self, request):        
         users = User.objects.filter(user_id=request.user.user_id)
         
@@ -434,31 +447,43 @@ class manage_user_view(APIView):
         return Response(serializer.data)
 
     def put(self, request):
-        ##TODO needs lots of checks to ensure only admins can update roles and only art managers can update users in their ARTs etc
-        user_id = request.query_params.get('user_id') or request.data.get('user_id')
-        if not user_id:
-            return Response({"error": "user_id is required either in query params or body"}, status=status.HTTP_400_BAD_REQUEST)
-            
+        user_id = request.user.user_id
         try:
             user = User.objects.get(user_id=user_id)
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
             
-        serializer = UserSerializer(user, data=request.data, partial=True)
-        if serializer.is_valid():
-         
-            if 'password' in request.data:
-                user.set_password(request.data['password'])
-            
-            serializer.save()
-            return Response(
+        user_login = request.data.get('user_login', user.user_login)
+        user_firstname = request.data.get('user_firstname', user.user_firstname)
+        user_lastname = request.data.get('user_lastname', user.user_lastname)
+        password = request.data.get('password')
+        user_role = request.data.get('user_role', user.user_role)
+        image = request.FILES.get("image") or request.FILES.get("user_image")
+
+        user = User.objects.filter(user_id=user_id).first()
+        user.user_login = user_login
+        user.user_firstname = user_firstname
+        user.user_lastname = user_lastname
+        if user_role in ["Admin", "Art Manager"]:
+            user.user_role = user_role
+            user.is_active = False
+        else:
+            user.user_role = user_role
+        if image:
+            ext = image.name.split('.')[-1]
+            file_name = f"user_{user.user_id}_{uuid.uuid4()}.{ext}"
+            image.name = file_name
+            user.user_image = image
+        if password:
+            user.set_password(password)
+        user.save()
+        return Response(
                 {
                     "message": "User updated successfully",
-                    "data": serializer.data
+                    "data": user.user_id
                 },
                 status=status.HTTP_200_OK
             )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request):
         user_id = request.query_params.get('user_id')
@@ -677,7 +702,7 @@ class get_leaderboard_art_level_view(APIView):
             return Response({"error": "No active sprint found for the user's ART"}, status=status.HTTP_400_BAD_REQUEST)
         
         # Get all team members in this ART
-        team_members = TeamMembersTable.objects.filter(team_art_art_id=art_id).select_related('user')
+        team_members = TeamMembersTable.objects.filter(team__art__art_id=art_id).select_related('user') 
         
         leaderboard = []
         for member in team_members:
@@ -690,7 +715,8 @@ class get_leaderboard_art_level_view(APIView):
                 award_id_str = str(nom.award.award_id)
                 if award_id_str not in awards_dict:
                     awards_dict[award_id_str] = {
-                        "award": nom.award.award_name,
+                        "award_name": nom.award.award_name,
+                        "award_image": nom.award.award_image.url if nom.award.award_image else "",
                         "total_nomniations_for_award": 0,
                         "nominations_information": []
                     }
@@ -780,11 +806,11 @@ class get_leaderboard_team_level_view(APIView):
             # Add to leaderboard if they have points or awards
             if (user.no_of_points and user.no_of_points > 0) or list_of_awards:
                 leaderboard.append({
-                    "employee_name": f"{user.user_firstname} {user.user_lastname}".strip(),
-                    "employee_image": user.user_image.url if user.user_image else "",
+                    "employeename": f"{user.user_firstname} {user.user_lastname}".strip(),
+                    "image": user.user_image.url if user.user_image else "",
                     "total_awards": user.no_of_awards or 0,
                     "total_no_of_points": user.no_of_points or 0,
-                    "list_of_awards": list_of_awards
+                    "List_of_awards": list_of_awards
                 })
                 
         # Sort leaderboard by total_no_of_points in descending order
