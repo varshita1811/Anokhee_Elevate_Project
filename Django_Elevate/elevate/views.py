@@ -1,5 +1,6 @@
 from django.utils import timezone
 from datetime import timedelta
+from .summarizer import summarize_employee_comments
 
 from .services import *
 from django.shortcuts import render
@@ -999,3 +1000,38 @@ class get_user_home_page_data_view(APIView):
     def get(self, request):
         response = Service.get_user_home_page_data(request)
         return CommonService.CustomResponse(response)
+
+class get_nominee_summary_view(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        nominee_id = request.query_params.get('nominee_id')
+        if not nominee_id:
+            return Response({"error": "nominee_id is required as a query parameter"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Check if nominee exists
+            if not TeamMembersTable.objects.filter(employee_id=nominee_id).exists():
+                return Response({"error": "Nominee not found"}, status=status.HTTP_404_NOT_FOUND)
+                
+            # Fetch all matching nominations
+            nominations = NominationsTable.objects.filter(nominee__employee_id=nominee_id)
+            if not nominations.exists():
+                return Response({"summary": "No nominations found for this employee."}, status=status.HTTP_200_OK)
+                
+            # Extract non-empty comments
+            comments_list = [nom.comments for nom in nominations if nom.comments and nom.comments.strip()]
+            
+            if not comments_list:
+                return Response({"summary": "No comments available to summarize."}, status=status.HTTP_200_OK)
+                
+            # Summarize using local Hugging Face model
+            summary = summarize_employee_comments(comments_list)
+            
+            return Response({
+                "nominee_id": nominee_id,
+                "summary": summary,
+                "total_comments_summarized": len(comments_list)
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
