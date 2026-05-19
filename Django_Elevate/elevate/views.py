@@ -1,7 +1,6 @@
 from django.utils import timezone
 from datetime import timedelta
-from .summarizer import summarize_employee_comments
-
+from .summarizer import summarizer
 from .services import *
 from django.shortcuts import render
 from rest_framework.views import APIView
@@ -440,7 +439,7 @@ class manage_user_view(APIView):
 
         return [IsAuthenticated()]
     def get(self, request):        
-        users = User.objects.filter(user_id=request.user.user_id)
+        users = User.objects.all()
         
         serializer = UserSerializer(users, many=True)
         for user_data in serializer.data:
@@ -740,6 +739,7 @@ class get_leaderboard_art_level_view(APIView):
             if (user.no_of_points and user.no_of_points > 0) or list_of_awards:
                 leaderboard.append({
                     "employeename": f"{user.user_firstname} {user.user_lastname}".strip(),
+                    "employee_id": str(member.employee_id),
                     "image": user.user_image.url if user and user.user_image else "",
                     "total_awards": user.no_of_awards or 0,
                     "total_no_of_points": user.no_of_points or 0,
@@ -808,6 +808,7 @@ class get_leaderboard_team_level_view(APIView):
             if (user.no_of_points and user.no_of_points > 0) or list_of_awards:
                 leaderboard.append({
                     "employeename": f"{user.user_firstname} {user.user_lastname}".strip(),
+                    "employee_id": str(member.employee_id),
                     "image": user.user_image.url if user.user_image else "",
                     "total_awards": user.no_of_awards or 0,
                     "total_no_of_points": user.no_of_points or 0,
@@ -1025,7 +1026,7 @@ class get_nominee_summary_view(APIView):
                 return Response({"summary": "No comments available to summarize."}, status=status.HTTP_200_OK)
                 
             # Summarize using local Hugging Face model
-            summary = summarize_employee_comments(comments_list)
+            summary = summarizer.summarize_employee_comments(comments_list)
             
             return Response({
                 "nominee_id": nominee_id,
@@ -1034,4 +1035,4 @@ class get_nominee_summary_view(APIView):
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

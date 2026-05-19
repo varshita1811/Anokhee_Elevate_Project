@@ -12,6 +12,394 @@ from .utils import *
 
 class Service:
     @staticmethod
+    def get_nomination_data(request):
+        user_id = request.user.user_id
+        teammember = TeamMembersTable.objects.filter(user__user_id=user_id).first()
+        team_art = teammember.team.art if teammember else None
+        
+        sprint_id = SprintTable.objects.filter(art=team_art,status='Active').values_list('sprint_id', flat=True).first()
+        if sprint_id is None:
+            return CommonService.error("No active sprint found for the user's ART",status_code=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            sprint = SprintTable.objects.get(sprint_id=sprint_id)
+            sprint_name = sprint.sprint_name
+
+            employee_id = TeamMembersTable.objects.filter(user__user_id=user_id).values_list('employee_id', flat=True).first()
+            
+           
+            nominations = NominationsTable.objects.filter(nominator__employee_id=employee_id, sprint=sprint_id)
+            awards_used = []
+            for nom in nominations:
+                awards_used.append({
+                    "award_id": str(nom.award.award_id),
+                    "award_name": nom.award.award_name,
+                    "award_description": nom.award.award_description
+                })
+                
+            # Find User's Team
+            try:
+                user_team_member = TeamMembersTable.objects.get(user__user_id=user_id)
+                user_team = user_team_member.team
+                art = user_team.art
+                
+                # 3. User Team Members
+                # Exclude the user themselves from their team list
+                user_team_members_qs = TeamMembersTable.objects.filter(team=user_team).exclude(user__user_id=user_id)
+                user_team_members = []
+                for member in user_team_members_qs:
+                    user_team_members.append({
+                        "employee_id": str(member.employee_id),
+                        "employee_name": f"{member.user.user_firstname} {member.user.user_lastname}",
+                        "team_name": user_team.team_name,
+                        "employee_role": member.user.user_role,
+                        "employee_image": member.user.user_image.url if member.user.user_image else ""
+                    })
+                    
+                # 4. Other Team Members
+                other_teams = TeamsTable.objects.filter(art=art).exclude(team_id=user_team.team_id)
+                other_team_members_qs = TeamMembersTable.objects.filter(team__in=other_teams)
+                other_team_members = []
+                for member in other_team_members_qs:
+                    other_team_members.append({
+                        "employee_id": str(member.employee_id),
+                        "employee_name": f"{member.user.user_firstname} {member.user.user_lastname}",
+                        "team_name": member.team.team_name,
+                        "employee_role": member.user.user_role,
+                        "employee_image": member.user.user_image.url if member.user.user_image else ""
+                    })
+            except TeamMembersTable.DoesNotExist:
+                user_team_members = []
+                other_team_members = []
+            
+            return_data ={
+                "sprint_name": sprint_name,
+                "awards_already_used": awards_used,
+                "user_team_members": user_team_members,
+                "other_team_members": other_team_members
+            }
+
+            return CommonService.success(return_data,)
+        
+        except Exception as e:
+            return CommonService.error(str(e),status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+    @staticmethod
+    def create_nomination(request):
+        nominator_id = request.data.get('nominator_id').replace("-","") if request.data.get('nominator_id') else None
+        nominee_id = request.data.get('nominee_id').replace("-","") if request.data.get('nominee_id') else None
+        sprint_id = request.data.get('sprint_id').replace("-","") if request.data.get('sprint_id') else None
+        award_id = request.data.get('award_id') if request.data.get('award_id') else None
+        comments = request.data.get('comments')
+        if not all([nominator_id, nominee_id, award_id, comments]):
+            return CommonService.error("nominator_id, nominee_id, award_id, and comments are required",status_code=status.HTTP_400_BAD_REQUEST)
+
+        if TeamMembersTable.objects.filter(user__user_id=request.user.user_id,employee_id=nominator_id).exists() is False:
+            return CommonService.error("You can only nominate if using your creds.",status_code=status.HTTP_403_FORBIDDEN)
+
+        try:
+            # 1. Validate Nominator
+            nominator = TeamMembersTable.objects.filter(employee_id=nominator_id).first()
+            print("Nominator:", nominator)
+            # 2. Validate Nominated Employee
+            nominee = TeamMembersTable.objects.filter(employee_id=nominee_id).first()
+            print("Nominee:", nominee)
+            nominee_user = nominee.user
+            
+            # 3. Validate Award
+            award = AwardsTable.objects.get(award_id=award_id)
+            
+            # 4. Get or infer Sprint
+            if sprint_id:
+                sprint = SprintTable.objects.get(sprint_id=sprint_id)
+            else:
+                sprint = SprintTable.objects.filter(art=nominee.team.art).order_by('-created_at').first()
+                if not sprint:
+                    return CommonService.error("No sprint found. Please provide sprint_id.",status_code=status.HTTP_400_BAD_REQUEST)
+            print("Sprint:", sprint)
+            print("Nominee Employee ID:", nominee.employee_id)
+            print("Nominator Employee ID:", nominator.employee_id) 
+            # 5. Check nominations left
+            nominations_made = NominationsTable.objects.filter(nominator=nominator, sprint=sprint, nominee=nominee).count()
+            print("Nominations Made:", nominations_made)
+            nominations_left = 5 - nominations_made
+            if nominations_left <= 0:
+                return CommonService.error("You have exhausted your 5 nominations for this sprint.",status_code=status.HTTP_400_BAD_REQUEST)
+                
+            # 6. Create Nomination
+            nomination = NominationsTable.objects.create(
+                nominee=nominee,
+                nominator=nominator,
+                award=award,
+                sprint=sprint,
+                comments=comments,
+            )
+            
+            # 7. Update User table
+            points_to_add = 10 
+            nominee_user.no_of_awards = (nominee_user.no_of_awards or 0) + 1
+            nominee_user.no_of_points = (nominee_user.no_of_points or 0) + points_to_add
+            nominee_user.save()
+            
+            # 8. Update JiraTasksTable
+            jira_task = JiraTasksTable.objects.filter(employee=nominee, sprint=sprint).first()
+            if jira_task:
+                jira_task.no_of_awards = (jira_task.no_of_awards or 0) + 1
+                jira_task.no_of_points = (jira_task.no_of_points or 0) + points_to_add
+                jira_task.save()
+            else:
+                JiraTasksTable.objects.create(
+                    employee=nominee,
+                    sprint=sprint,
+                    team=nominee.team,
+                    no_of_awards=1,
+                    no_of_points=points_to_add,
+                    tasks = None 
+                )
+            return CommonService.success(data = {"nomination_id": str(nomination.nomination_id),"no_of_nominations_left": nominations_left-1},message="Nomination created successfully")
+            
+        except Exception as e:
+            return CommonService.error(str(e),status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @staticmethod
+    def get_current_sprint(request):
+        team = TeamMembersTable.objects.filter(user__user_id=request.user.user_id).select_related('team').first()
+        art_id = TeamsTable.objects.filter(team_id=team.team_id).values_list('art_id', flat=True).first() if team else None
+        if not art_id:
+            return CommonService.error("art_id is required in query parameters",status_code=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            current_sprint = SprintTable.objects.filter(art=art_id, status="Active").first()
+            if not current_sprint:
+                return CommonService.error("No active sprint found for this ART", status_code=status.HTTP_404_NOT_FOUND)
+            
+            serializer = SprintSerializer(current_sprint)
+            return CommonService.success(serializer.data)
+            
+        except Exception as e:
+            return CommonService.error(str(e),status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+    @staticmethod
+    def get_leaderboard_art_level(request):
+        art_id = request.query_params.get('art_id')
+        if not art_id or ARTTable.objects.filter(art_id=art_id).first() is None:
+            return CommonService.error("art_id is invalid or not provided",status_code=status.HTTP_400_BAD_REQUEST)
+        
+        get_current_sprint_view_instance = Service.get_current_sprint()
+        sprint_response = get_current_sprint_view_instance.get(request)
+        if sprint_response.status_code != 200: 
+            return CommonService.error("Could not fetch current sprint information",status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        sprint_id = sprint_response.data.get("sprint_id")
+        if not sprint_id:
+            return CommonService.error("No active sprint found for the user's ART",status_code=status.HTTP_400_BAD_REQUEST)
+        
+        # Get all team members in this ART
+        team_members = TeamMembersTable.objects.filter(team__art__art_id=art_id).select_related('user') 
+        
+        leaderboard = []
+        for member in team_members:
+            user = member.user
+            # Fetch all nominations for this employee
+            nominations = NominationsTable.objects.filter(nominee=member, sprint_id=sprint_id).select_related('award')
+            # Group nominations by award  
+            awards_dict = {}
+            for nom in nominations:
+                award_id_str = str(nom.award.award_id)
+                if award_id_str not in awards_dict:
+                    awards_dict[award_id_str] = {
+                        "award_name": nom.award.award_name,
+                        "award_image": nom.award.award_image.url if nom.award.award_image else "",
+                        "total_nomniations_for_award": 0,
+                        "nominations_information": []
+                    }
+                
+                awards_dict[award_id_str]["total_nomniations_for_award"] += 1
+                # Fetch nominator details
+                try:
+                    nominator_user = User.objects.get(user_id=nom.nominator.user.user_id) if nom.nominator and nom.nominator.user else None 
+                    nominator_name = f"{nominator_user.user_firstname} {nominator_user.user_lastname}".strip()
+                except User.DoesNotExist:
+                    nominator_name = "Unknown"
+                awards_dict[award_id_str]["nominations_information"].append({
+                    "nominator": nominator_name,
+                    "nomination_date": nom.nomination_date.strftime("%Y-%m-%d") if nom.nomination_date else nom.created_at.strftime("%Y-%m-%d"),
+                    "comments": nom.comments
+                })
+            
+            list_of_awards = list(awards_dict.values())
+            # Add to leaderboard if they have points or awards
+            if (user.no_of_points and user.no_of_points > 0) or list_of_awards:
+                leaderboard.append({
+                    "employeename": f"{user.user_firstname} {user.user_lastname}".strip(),
+                    "image": user.user_image.url if user and user.user_image else "",
+                    "total_awards": user.no_of_awards or 0,
+                    "total_no_of_points": user.no_of_points or 0,
+                    "List_of_awards": list_of_awards
+                })
+        # Sort leaderboard by total_no_of_points in descending order
+        leaderboard.sort(key=lambda x: x["total_no_of_points"], reverse=True)
+        return CommonService.success(leaderboard)
+
+
+    @staticmethod
+    def get_leaderboard_team_level(request):
+        team_id = TeamMembersTable.objects.filter(user__user_id=request.user.user_id).values_list('team__team_id', flat=True).first()
+        if not team_id or team_id is None:
+            return CommonService.error("team_id is required in query parameters",status_code=status.HTTP_400_BAD_REQUEST)
+        
+        get_current_sprint_view_instance = Service.get_current_sprint()
+        sprint_response = get_current_sprint_view_instance.get(request)
+        if sprint_response.status_code != 200: 
+            return CommonService.error("Could not fetch current sprint information",status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        sprint_id = sprint_response.data.get("sprint_id")
+        if not sprint_id:
+            return CommonService.error("No active sprint found for the user's ART",status=status.HTTP_400_BAD_REQUEST)
+
+
+        # Get all team members in this specific team
+        team_members = TeamMembersTable.objects.filter(team=team_id).select_related('user')
+        
+        leaderboard = []
+        for member in team_members:
+            user = member.user
+            
+            # Fetch all nominations for this employee
+            nominations = NominationsTable.objects.filter(nominee__employee_id=member.employee_id, sprint=sprint_id).select_related('award')
+            
+            # Group nominations by award
+            awards_dict = {}
+            for nom in nominations:
+                award_id_str = str(nom.award.award_id)
+                if award_id_str not in awards_dict:
+                    awards_dict[award_id_str] = {
+                        "award_name": nom.award.award_name,
+                        "award_image": nom.award.award_image.url if nom.award and nom.award.award_image else "",
+                        "total_nominations_for_award": 0,
+                        "nominations_information": []
+                    }
+                
+                awards_dict[award_id_str]["total_nominations_for_award"] += 1
+                
+                # Fetch nominator details
+                try:
+                    nominator_user = User.objects.get(user_id=nom.nominator.user.user_id)
+                    nominator_name = f"{nominator_user.user_firstname} {nominator_user.user_lastname}".strip()
+                except User.DoesNotExist:
+                    nominator_name = "Unknown"
+                    
+                awards_dict[award_id_str]["nominations_information"].append({
+                    "nominator": nominator_name,
+                    "nomination_date": nom.nomination_date.strftime("%Y-%m-%d") if nom.nomination_date else nom.created_at.strftime("%Y-%m-%d"),
+                    "comments": nom.comments
+                })
+            
+            list_of_awards = list(awards_dict.values())
+            
+            # Add to leaderboard if they have points or awards
+            if (user.no_of_points and user.no_of_points > 0) or list_of_awards:
+                leaderboard.append({
+                    "employeename": f"{user.user_firstname} {user.user_lastname}".strip(),
+                    "image": user.user_image.url if user.user_image else "",
+                    "total_awards": user.no_of_awards or 0,
+                    "total_no_of_points": user.no_of_points or 0,
+                    "List_of_awards": list_of_awards
+                })
+                
+        # Sort leaderboard by total_no_of_points in descending order
+        leaderboard.sort(key=lambda x: x["total_no_of_points"], reverse=True)
+
+        return CommonService.success(leaderboard)
+    
+
+    @staticmethod
+    def get_pending_art_managers(request):
+        try:
+            user_ids_of_managers = User.objects.filter(user_role="Art Manager", is_active=False)
+            response_data = []
+            for user in user_ids_of_managers:
+                response_data.append({
+                    "user_id": str(user.user_id),
+                    "user_name": f"{user.user_firstname} {user.user_lastname}".strip(),
+                    "user_role": "Art Manager",
+                    "status": "Pending"
+                })  
+            return CommonService.success(response_data)          
+            
+        except Exception as e:
+            return CommonService.error(str(e),status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @staticmethod
+    def get_admin_dashboard_details(request):
+        try:
+            total_users = User.objects.exclude(user_role__in=["Admin","Art Manager"]).count()
+            total_arts = ARTTable.objects.count()
+            total_teams = TeamsTable.objects.count()
+            all_time_nominations = NominationsTable.objects.count()
+            ##TODO have total_employess and total_art_managers 
+            response_data = {
+                "total_users": total_users,
+                "total_arts": total_arts,
+                "total_teams": total_teams,
+                "all_time_nominations": all_time_nominations,
+            }
+            return CommonService.success(response_data)
+            
+        except Exception as e:
+            return CommonService.error(str(e),status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @staticmethod
+    def get_registered_art_managers(request):
+        try:
+            # Fetch all users with the role 'Art Manager'
+            art_managers = User.objects.filter(user_role="Art Manager",is_active=True)
+            
+            response_data = []
+            for manager in art_managers:
+                user_name = f"{manager.user_firstname} {manager.user_lastname}".strip()
+                status_text = "Active" if manager.is_active else "Pending"
+                
+                response_data.append({
+                    "user_name": user_name,
+                    "user_role": manager.user_role,
+                    "status": status_text,
+                    "user_login": manager.user_login,
+                    "art_name": ARTTable.objects.filter(user__user_id=manager.user_id).values_list('art_name', flat=True).first() or "N/A",
+                    "department": ARTTable.objects.filter(user__user_id=manager.user_id).values_list('department', flat=True).first() or "N/A"
+                })
+            return CommonService.success(response_data)    
+        except Exception as e:
+            return CommonService.error(str(e),status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @staticmethod
+    def get_pending_art_employees(request):
+        art_id = request.query_params.get('art_id')
+        user_id =  request.user.user_id
+        if not art_id  or not user_id:
+            return CommonService.error(message="art_id and user_id are required in query parameters",status_code=status.HTTP_400_BAD_REQUEST)
+        response_data = []
+        try:
+            if (not ARTTable.objects.filter(art_id=art_id,user__user_id=user_id).exists()):
+                return CommonService.error(message="ART not found or User is not part of the ART",status_code=status.HTTP_404_NOT_FOUND)
+            teams_ids = TeamsTable.objects.filter(art=art_id).values_list('team_id', flat=True)            
+            inactive_team_members = TeamMembersTable.objects.filter(team__team_id__in=teams_ids, is_active=0)
+            for member in inactive_team_members:
+                user = member.user
+                response_data.append({
+                    "employee_id": str(member.employee_id),
+                    "team_id": str(member.team.team_id),
+                    "employee_name": f"{user.user_firstname} {user.user_lastname}".strip(),
+                    "team_name": member.team.team_name,
+                    "employee_role": user.user_role,
+                    "image": user.user_image.url if user.user_image else "",
+                    "active_status": "Pending"
+                })
+            return CommonService.success(response_data)
+        except Exception as e:
+            return CommonService.error(message= str(e),status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+
+    @staticmethod
     def get_art_employees(request):
         art_id = request.query_params.get('art_id')
         if not art_id:
@@ -119,7 +507,8 @@ class Service:
                 "art_level_champions_top5": get_art_level_champions_top5(art_id_of_user),
                 "organization_level_champions_top5_till_now": get_organization_level_champions_top5_till_now(),
                 "total_nominations_done_in_last_day": get_total_nominations_done_in_last_day(),
-                "total_active_Employees": get_total_active_employees()
+                "total_active_Employees": get_total_active_employees(),
+                "is_manager": request.user.user_role == "Manager"
             }
             return CommonService.success(data=home_page_data)
         except User.DoesNotExist:

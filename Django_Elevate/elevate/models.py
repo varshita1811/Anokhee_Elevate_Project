@@ -113,6 +113,14 @@ class NominationsTable(models.Model):
     nomination_date = models.DateTimeField(auto_now_add=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+     
+    ##create indexes for nominee, sprint, award, nominator
+    class Meta:
+        indexes = [
+            models.Index(fields=['nominee']),
+            models.Index(fields=['sprint']),
+            models.Index(fields=['nominator']),
+        ]
 
 
 class JiraTasksTable(models.Model):
@@ -123,3 +131,10 @@ class JiraTasksTable(models.Model):
     sprint = models.ForeignKey(SprintTable, to_field='sprint_id', on_delete=models.CASCADE, related_name='jira_tasks')
     no_of_points = models.IntegerField(null=True, default=0)
     no_of_awards = models.IntegerField(null=True, default=0)
+
+    #create indexes for employee, sprint
+    class Meta:
+        indexes = [
+            models.Index(fields=['employee']),
+            models.Index(fields=['sprint'])
+        ]

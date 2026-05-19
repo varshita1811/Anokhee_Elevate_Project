@@ -3,12 +3,12 @@ from rest_framework.response import Response
 
 class CommonService:
     @staticmethod
-    def success(data={}, message="Success", status=status.HTTP_200_OK):
+    def success(data={}, message="Success", status_code=status.HTTP_200_OK):
         return {
             "success": True,
             "message": message,
             "data": data,
-            "status": status
+            "status": status_code
         }
     
     @staticmethod
