@@ -55,7 +55,31 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.AnonRateThrottle',
+    ],
+
+    'DEFAULT_THROTTLE_RATES': {
+        'user': '100/hour',
+        'anon': '20/hour',
+        'nomination': '10/minute',
+        'ARTleaderboard': '60/minute',
+        'TeamLeaderboard': '50/minute',
+        'employeeHomepage': '20/minute',
+        'employeeDetails': '30/minute',
+        'AICommentsSummary': '5/minute',
+    }
 }
+
+# Authenticated users (JWT token present) → 100/hour
+# Non-authenticated users (anon) → 20/hour
+
+# Rate limiting is per authenticated user, not per token.
+# So if:
+# same user logs in on 3 devices
+# all use different JWTs
+# the limit is still shared for that user account.
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
@@ -107,7 +131,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'anokhee_elevate_project',
         'USER': 'root',
-        'PASSWORD': 'Varshita@123',
+        'PASSWORD': 'Karthik@4711',
         'HOST': 'localhost',
         'PORT': '3306',
         'OPTIONS': {
@@ -116,6 +140,16 @@ DATABASES = {
     }
 }
 
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://127.0.0.1:6379/1",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    }
+}
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators

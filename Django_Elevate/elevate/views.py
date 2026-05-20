@@ -1,15 +1,13 @@
-from django.utils import timezone
-from datetime import timedelta
 from .summarizer import summarizer
 from .services import *
-from django.shortcuts import render
 from rest_framework.views import APIView
 from .models import *
 from rest_framework.response import Response 
 from .serializers import *
 from rest_framework.permissions import IsAuthenticated,IsAdminUser
 from rest_framework import status
-from django.db.models import Count
+from rest_framework.throttling import ScopedRateThrottle
+from django.core.cache import cache
 
 class manage_art_view(APIView):
     permission_classes = [IsAuthenticated]
@@ -499,6 +497,8 @@ class manage_user_view(APIView):
 
 class get_nomination_data_view(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'employeeHomepage'
     def get(self, request):
         user_id = request.user.user_id
         teammember = TeamMembersTable.objects.filter(user__user_id=user_id).first()
@@ -573,6 +573,8 @@ class get_nomination_data_view(APIView):
 
 class create_nomination_view(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'employeeHomepage'
     def post(self, request):
         nominator_id = request.data.get('nominator_id').replace("-","") if request.data.get('nominator_id') else None
         nominee_id = request.data.get('nominee_id').replace("-","") if request.data.get('nominee_id') else None
@@ -688,6 +690,8 @@ class get_current_sprint_view(APIView):
 
 class get_leaderboard_art_level_view(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes =[ScopedRateThrottle]
+    throttle_scope = 'ARTleaderboard'
     def get(self, request):
         art_id = request.query_params.get('art_id')
         if not art_id or ARTTable.objects.filter(art_id=art_id).first() is None:
@@ -701,6 +705,17 @@ class get_leaderboard_art_level_view(APIView):
         if not sprint_id:
             return Response({"error": "No active sprint found for the user's ART"}, status=status.HTTP_400_BAD_REQUEST)
         
+        # Cache key
+        cache_key = f"art_leaderboard:{art_id}:{sprint_id}"
+
+        # Check cache
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            print("Cache hit for key:", cache_key)
+            return Response(cached_data, status=status.HTTP_200_OK)
+        else:
+            print("Cache miss for key:", cache_key)
+
         # Get all team members in this ART
         team_members = TeamMembersTable.objects.filter(team__art__art_id=art_id).select_related('user') 
         
@@ -708,7 +723,7 @@ class get_leaderboard_art_level_view(APIView):
         for member in team_members:
             user = member.user
             # Fetch all nominations for this employee
-            nominations = NominationsTable.objects.filter(nominee=member, sprint_id=sprint_id).select_related('award')
+            nominations = NominationsTable.objects.filter(nominee=member, sprint_id=sprint_id).select_related('award','nominator__user')
             # Group nominations by award  
             awards_dict = {}
             for nom in nominations:
@@ -724,7 +739,7 @@ class get_leaderboard_art_level_view(APIView):
                 awards_dict[award_id_str]["total_nomniations_for_award"] += 1
                 # Fetch nominator details
                 try:
-                    nominator_user = User.objects.get(user_id=nom.nominator.user.user_id) if nom.nominator and nom.nominator.user else None 
+                    nominator_user = nom.nominator.user 
                     nominator_name = f"{nominator_user.user_firstname} {nominator_user.user_lastname}".strip()
                 except User.DoesNotExist:
                     nominator_name = "Unknown"
@@ -747,10 +762,18 @@ class get_leaderboard_art_level_view(APIView):
                 })
         # Sort leaderboard by total_no_of_points in descending order
         leaderboard.sort(key=lambda x: x["total_no_of_points"], reverse=True)
+
+        # Save to cache for 10 minutes 
+        cache_timeout = CommonService.get_cache_timeout_for_leaderboard(sprint_id)
+        print("cache timeout for sprint_id", sprint_id, "is", cache_timeout)
+        cache.set(cache_key, leaderboard, timeout=cache_timeout)
+
         return Response(leaderboard, status=status.HTTP_200_OK)
 
 class get_leaderboard_team_level_view(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'TeamLeaderboard'
     def get(self, request):
         team_id = TeamMembersTable.objects.filter(user__user_id=request.user.user_id).values_list('team__team_id', flat=True).first()
         if not team_id or team_id is None:
@@ -763,6 +786,17 @@ class get_leaderboard_team_level_view(APIView):
         sprint_id = sprint_response.data.get("sprint_id")
         if not sprint_id:
             return Response({"error": "No active sprint found for the user's ART"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Cache key
+        cache_key = f"team_leaderboard:{team_id}:{sprint_id}"
+
+        # Check cache 
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            print("Cache hit for key:", cache_key)
+            return Response(cached_data, status=status.HTTP_200_OK)
+        else:
+            print("Cache miss for key:", cache_key)
 
 
         # Get all team members in this specific team
@@ -817,7 +851,12 @@ class get_leaderboard_team_level_view(APIView):
                 
         # Sort leaderboard by total_no_of_points in descending order
         leaderboard.sort(key=lambda x: x["total_no_of_points"], reverse=True)
-        
+        # Save to cache for 10 minutes
+        cache_timeout = CommonService.get_cache_timeout_for_leaderboard(sprint_id)
+        print("cache timeout for sprint_id", sprint_id, "is", cache_timeout)
+        cache.set(cache_key, leaderboard, timeout=cache_timeout)
+        print("Data saved to cache for key:", cache_key)
+
         return Response(leaderboard, status=status.HTTP_200_OK)
 
 class get_admin_dashboard_details_view(APIView):
@@ -986,6 +1025,8 @@ class update_art_manager_request_view(APIView):
         
 class get_user_employee_details_view(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'employeeDetails'
     def get(self, request):
         response = Service.get_user_employee_details(request)
         return CommonService.CustomResponse(response)
@@ -998,12 +1039,16 @@ class get_arts_and_teams_view(APIView):
 
 class get_user_home_page_data_view(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'employeeHomepage'
     def get(self, request):
         response = Service.get_user_home_page_data(request)
         return CommonService.CustomResponse(response)
 
 class get_nominee_summary_view(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'AICommentsSummary'
     def get(self, request):
         nominee_id = request.query_params.get('nominee_id')
         if not nominee_id:
@@ -1032,6 +1077,38 @@ class get_nominee_summary_view(APIView):
                 "nominee_id": nominee_id,
                 "summary": summary,
                 "total_comments_summarized": len(comments_list)
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class change_employee_status_view(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUser]
+    def post(self, request):
+        user_id = request.query_params.get('user_id')
+        new_status = request.query_params.get('status')
+        
+        if not user_id or new_status not in ['activate', 'deactivate']:
+            return Response({"error": "user_id and valid new_status ('activate' or 'deactivate') are required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            team_member = TeamMembersTable.objects.filter(user_id=user_id).first()
+            if not team_member:
+                return Response({"error": "Employee not found"}, status=status.HTTP_404_NOT_FOUND)
+            
+            team_member.is_active = True if new_status == 'activate' else False
+            team_member.save()
+
+            user  = User.objects.filter(user_id=user_id).first()
+            if user:
+                user.is_active = team_member.is_active
+                user.save()
+            
+            return Response({
+                "user_id": user_id,
+                "new_status": new_status,
+                "message": f"Employee status updated to {new_status}"
             }, status=status.HTTP_200_OK)
             
         except Exception as e:

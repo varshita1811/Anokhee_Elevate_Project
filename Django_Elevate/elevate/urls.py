@@ -26,4 +26,5 @@ urlpatterns=[
     path('get-arts-and-teams/', get_arts_and_teams_view.as_view()),
     path('get-user-home-page-data/', get_user_home_page_data_view.as_view()), 
     path('comments-summary/', get_nominee_summary_view.as_view()),
+    path('changeEmployeeStatus/', change_employee_status_view.as_view()),
 ]
